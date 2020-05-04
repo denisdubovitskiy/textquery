@@ -30,6 +30,8 @@ def _build_filters(children: Q, node: Node):
             children = children & build_filters_from_parse_tree(Q(), child)
         if node.key.data == 'OR':
             children = children | build_filters_from_parse_tree(Q(), child)
+        if node.key.data == 'NOT':
+            children = children & ~build_filters_from_parse_tree(~Q(), child)
 
     return children
 
