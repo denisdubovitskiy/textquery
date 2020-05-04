@@ -77,7 +77,7 @@ class Parser:
                             key=operator,
                         )
                     )
-                    word, field_name = '', ''
+                    word, field_name, field_operator = '', '', ''
                     char_index += len(operator)
                     continue
 
@@ -131,13 +131,13 @@ class Parser:
                     field_name = word
                     if field_name.endswith(self.field_close_parenthesis):
                         try:
-                            open_parentesis_index = field_name.index(self.field_open_parenthesis)
+                            open_parenthesis_index = field_name.index(self.field_open_parenthesis)
                         except ValueError:
                             # TODO: handle validation error
                             raise
 
-                        field_operator = field_name[open_parentesis_index + 1:len(field_name) - 1]
-                        field_name = field_name[:open_parentesis_index]
+                        field_operator = field_name[open_parenthesis_index + 1:len(field_name) - 1]
+                        field_name = field_name[:open_parenthesis_index]
                     word = ''
                     part_index += 1
                     continue
