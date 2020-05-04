@@ -42,7 +42,7 @@ class Node:
 class Parser:
 
     def __init__(self, **options):
-        self.operators = options.get('operators', {'OR', 'AND'})
+        self.operators = options.get('operators', {'OR', 'AND', 'NOT'})
         self.open_parenthesis = options.get('open_parenthesis', '(')
         self.close_parenthesis = options.get('open_parenthesis', ')')
         self.field_delimiter = options.get('field_delimiter', ':')
