@@ -53,8 +53,29 @@ class Parser:
         self.parentheses = {self.open_parenthesis, self.close_parenthesis}
         self.operator_startswith = {operator[0]: operator for operator in self.operators}
 
+    def _check_needs_wrapping(self, query: str) -> bool:
+        """Check if the query needs to be wrapped by the parentheses."""
+
+        chunks = []
+        current_chunk = [0, 0]
+
+        for i, character in enumerate(query):
+            if character == self.open_parenthesis:
+                current_chunk[0] = i
+
+            if character == self.close_parenthesis:
+                current_chunk[1] = i
+                chunks.append(current_chunk)
+                current_chunk = [0, 0]
+
+        if not chunks:
+            return True
+
+        largest_chunk = sorted(chunks, key=lambda c: -(c[1] - c[0]))[0]
+        return largest_chunk[1] - largest_chunk[0] != len(query) - 1
+
     def _split_query_to_parts(self, query: str) -> List[QueryPart]:
-        if not query.startswith(self.open_parenthesis) or not query.endswith(self.close_parenthesis):
+        if self._check_needs_wrapping(query):
             query = f'{self.open_parenthesis}{query}{self.close_parenthesis}'
 
         query_parts: List[QueryPart] = []
