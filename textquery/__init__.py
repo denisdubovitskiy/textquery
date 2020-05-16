@@ -1,3 +1,3 @@
-from .query import Parser, QueryPart
+from .query import Token, parse
 
-__all__ = ['Parser', 'QueryPart']
+__all__ = ['Token', 'parse']

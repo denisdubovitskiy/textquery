@@ -1,206 +1,213 @@
 from collections import deque
-from typing import List, Deque
+from typing import (
+    List,
+    Deque,
+    NamedTuple,
+    Optional,
+    Dict,
+)
+
+EMDASH = '—'
+PSEUDO_DELIMITER = f'{EMDASH}_{EMDASH}'
+RIGHT, LEFT = range(2)
+NOT, AND, OR = 'NOT', 'AND', 'OR'
+FIELD_DELIMITER = ':'
+LEFT_PAREN, RIGHT_PAREN = '(', ')'
 
 
-class QueryPart:
-    __slots__ = ('data', 'field_name', 'field_operator')
+class Stack(deque):
+    def peek(self):
+        return self[-1]
 
-    def __init__(self, key, field_name='', field_operator=''):
+
+class Token:
+    __slots__ = ('key', 'field_name', 'field_operator', 'modifier')
+
+    def __init__(self, key, field_name='', field_operator='', modifier=''):
         self.field_name = field_name
         self.field_operator = field_operator
-        self.data = key
+        self.key = key
+        self.modifier = modifier
 
-    def __str__(self):
+    def __str__(self) -> str:
         if not self.field_name:
-            return self.data
-        return f'{self.field_name}:{self.data}'
+            return self.key
+        return f'{self.field_name}:{self.key}'
+
+
+def is_operator(source: str) -> bool:
+    return source in {OR, AND, NOT}
+
+
+def is_operand(source: str) -> bool:
+    return source not in {LEFT_PAREN, RIGHT_PAREN, OR, AND, NOT}
+
+
+def is_open_paren(source: str) -> bool:
+    return source == LEFT_PAREN
+
+
+def is_close_paren(source: str) -> bool:
+    return source == RIGHT_PAREN
+
+
+def is_not(operator: str) -> bool:
+    return operator == NOT
+
+
+def has_delimiter(source: str) -> bool:
+    return FIELD_DELIMITER in source
+
+
+def format_replacer(source: str) -> str:
+    return f'{PSEUDO_DELIMITER}{source}{PSEUDO_DELIMITER}'
+
+
+OPERATOR_REPLACEMENTS = {
+    NOT: format_replacer(NOT),
+    AND: format_replacer(AND),
+    OR: format_replacer(OR),
+    LEFT_PAREN: format_replacer(LEFT_PAREN),
+    RIGHT_PAREN: format_replacer(RIGHT_PAREN),
+
+}
+
+FIELD_REPLACEMENTS = {
+    '[': format_replacer('['),
+    ']': format_replacer(']'),
+    '{': format_replacer('{'),
+    '}': format_replacer('}'),
+    FIELD_DELIMITER: format_replacer(FIELD_DELIMITER),
+}
+
+
+def replace(source: str, replacements: Dict[str, str]) -> List[str]:
+    replaced = source
+    for token, replacement in replacements.items():
+        replaced = replaced.replace(token, replacement)
+    return [r.strip() for r in replaced.split(PSEUDO_DELIMITER) if r.strip()]
+
+
+def replace_operators(source: str) -> List[str]:
+    return replace(source, OPERATOR_REPLACEMENTS)
+
+
+def replace_field_parens(query: str) -> List[str]:
+    return replace(query, FIELD_REPLACEMENTS)
+
+
+def tokenize(query: str) -> List[Token]:
+    tokens: List[Token] = []
+
+    for part in replace_operators(query):
+        if not has_delimiter(part):
+            tokens.append(Token(part))
+            continue
+
+        field_descriptor = replace_field_parens(part)
+
+        if len(field_descriptor) == 6:
+            field, _, operator, _, _, value = field_descriptor
+            tokens.append(Token(value, field, operator))
+        else:
+            field, _, modifier, _, _, operator, _, _, value = field_descriptor
+            tokens.append(Token(value, field, operator, modifier))
+
+    return tokens
+
+
+class Operator(NamedTuple):
+    precedence: int
+    associativity: int
+
+
+OPERATORS = {
+    NOT: Operator(precedence=3, associativity=RIGHT),
+    AND: Operator(precedence=2, associativity=LEFT),
+    OR: Operator(precedence=1, associativity=LEFT),
+}
 
 
 class Node:
-    __slots__ = ('key', 'children')
-
-    def __init__(self, key: QueryPart):
-        self.key: QueryPart = key
-        self.children: Deque[Node] = deque()
-
-    def __str__(self):
-        return self.key
-
-    def insert_left(self, key):
-        self.children.appendleft(Node(key))
-
-    def insert_right(self, key):
-        self.children.append(Node(key))
-
-    def access_left_child(self) -> 'Node':
-        return self.children[0]
-
-    def access_right_child(self) -> 'Node':
-        return self.children[-1]
+    def __init__(self, data: Token, left: Optional['Node'] = None, right: Optional['Node'] = None):
+        self.data = data
+        self.left = left
+        self.right = right
 
 
-class Parser:
+def has_precedence(a: Token, b: Token):
+    op_a, op_b = OPERATORS[a.key], OPERATORS[b.key]
 
-    def __init__(self, **options):
-        self.operators = options.get('operators', {'OR', 'AND', 'NOT'})
-        self.open_parenthesis = options.get('open_parenthesis', '(')
-        self.close_parenthesis = options.get('open_parenthesis', ')')
-        self.field_delimiter = options.get('field_delimiter', ':')
-        self.field_open_parenthesis = options.get('field_open_parenthesis', '[')
-        self.field_close_parenthesis = options.get('field_close_parenthesis', ']')
+    is_right_associative = op_b.associativity == RIGHT and op_a.precedence > op_b.precedence
+    is_left_associative = op_b.associativity == LEFT and op_a.precedence >= op_b.precedence
 
-        self.operators_or_close_parenthesis = {*self.operators, self.close_parenthesis}
-        self.parentheses = {self.open_parenthesis, self.close_parenthesis}
-        self.operator_startswith = {operator[0]: operator for operator in self.operators}
+    return is_left_associative or is_right_associative
 
-    def _check_needs_wrapping(self, query: str) -> bool:
-        """Check if the query needs to be wrapped by the parentheses."""
 
-        chunks = []
-        current_chunk = [0, 0]
+def parse_search_query(tokens: List[Token]) -> Deque[Token]:
+    reverse_notation: Deque[Token] = deque()
+    operators: Stack[Token] = Stack()
 
-        for i, character in enumerate(query):
-            if character == self.open_parenthesis:
-                current_chunk[0] = i
+    for token in tokens:
+        if is_operand(token.key):
+            reverse_notation.append(token)
+            continue
 
-            if character == self.close_parenthesis:
-                current_chunk[1] = i
-                chunks.append(current_chunk)
-                current_chunk = [0, 0]
+        if is_open_paren(token.key):
+            operators.append(token)
+            continue
 
-        if not chunks:
-            return True
+        if is_close_paren(token.key):
+            while True:
+                current_token = operators.pop()
 
-        largest_chunk = sorted(chunks, key=lambda c: -(c[1] - c[0]))[0]
-        return largest_chunk[1] - largest_chunk[0] != len(query) - 1
-
-    def _split_query_to_parts(self, query: str) -> List[QueryPart]:
-        if self._check_needs_wrapping(query):
-            query = f'{self.open_parenthesis}{query}{self.close_parenthesis}'
-
-        query_parts: List[QueryPart] = []
-
-        field_name = ''
-        field_operator = ''
-        word = ''
-        char_index = 0
-
-        while char_index < len(query):
-            character = query[char_index]
-            if character in self.operator_startswith:
-                operator = self.operator_startswith[character]
-                next_characters = query[char_index:char_index + len(operator)]
-                if next_characters == operator:
-                    query_parts.append(
-                        QueryPart(
-                            field_name=field_name.strip(),
-                            field_operator=field_operator.strip(),
-                            key=operator,
-                        )
-                    )
-                    word, field_name, field_operator = '', '', ''
-                    char_index += len(operator)
-                    continue
-
-            if character in self.parentheses:
-                query_parts.append(
-                    QueryPart(
-                        field_name=field_name.strip(),
-                        field_operator=field_operator.strip(),
-                        key=character,
-                    )
-                )
-                word, field_name, field_operator = '', '', ''
-                char_index += 1
-                continue
-
-            part_index = char_index
-            while part_index < len(query):
-                character = query[part_index]
-                if character in self.parentheses:
-                    word = word.strip()
-                    if word:
-                        query_parts.append(
-                            QueryPart(
-                                field_name=field_name.strip(),
-                                field_operator=field_operator.strip(),
-                                key=word,
-                            )
-                        )
-                    word, field_name, field_operator = '', '', ''
-                    char_index = part_index - 1
+                if is_open_paren(current_token.key):
                     break
 
-                if character in self.operator_startswith:
-                    operator = self.operator_startswith[character]
-                    next_characters = query[part_index:part_index + len(operator)]
-                    if next_characters == operator:
-                        word = word.strip()
-                        if word:
-                            query_parts.append(
-                                QueryPart(
-                                    field_name=field_name.strip(),
-                                    field_operator=field_operator.strip(),
-                                    key=word,
-                                )
-                            )
-                        word, field_name, field_operator = '', '', ''
-                        char_index = part_index - 1
-                        break
+                reverse_notation.append(current_token)
 
-                if character == self.field_delimiter:
-                    field_name = word
-                    if field_name.endswith(self.field_close_parenthesis):
-                        try:
-                            open_parenthesis_index = field_name.index(self.field_open_parenthesis)
-                        except ValueError:
-                            # TODO: handle validation error
-                            raise
+            continue
 
-                        field_operator = field_name[open_parenthesis_index + 1:len(field_name) - 1]
-                        field_name = field_name[:open_parenthesis_index]
-                    word = ''
-                    part_index += 1
-                    continue
+        if is_operator(token.key):
+            while True:
+                if not operators:
+                    break
 
-                word += character
-                part_index += 1
-            char_index += 1
-        return query_parts
+                if not is_operator(operators.peek().key):
+                    break
 
-    def parse(self, query: str) -> Node:
-        splitted_query = self._split_query_to_parts(query)
-        stack = deque()
-        tree = Node(QueryPart(''))
-        stack.append(tree)
-        current_node = tree
+                if not has_precedence(operators.peek(), token):
+                    break
 
-        for component in splitted_query:
-            if component.data == self.open_parenthesis:
-                current_node.insert_left('')
-                stack.append(current_node)
-                current_node = current_node.access_left_child()
+                reverse_notation.append(operators.pop())
 
-            elif component.data not in self.operators_or_close_parenthesis:
-                current_node.key = component
-                parent = stack.pop()
-                current_node = parent
+            operators.append(token)
+            continue
 
-            elif component.data in self.operators:
-                current_node.key = component
-                current_node.insert_right('')
-                stack.append(current_node)
-                current_node = current_node.access_right_child()
+    reverse_notation.extend(reversed(operators))
 
-            elif component.data == self.close_parenthesis:
-                current_node = stack.pop()
+    return reverse_notation
 
-            else:
-                raise ValueError()
 
-        # Regular text query
-        if len(splitted_query) == 3:
-            return tree.access_left_child()
+def construct_binary_tree(parts: Deque[Token]) -> Node:
+    stack: Deque[Node] = deque()
 
-        # Advanced text query
-        return tree
+    for part in parts:
+        if not is_operator(part.key):
+            stack.append(Node(part))
+            continue
+
+        right = stack.pop()
+
+        if is_not(part.key):
+            stack.append(Node(part, right=right))
+            continue
+
+        left = stack.pop()
+        stack.append(Node(part, right=right, left=left))
+
+    return stack.pop()
+
+
+def parse(query: str) -> Node:
+    return construct_binary_tree(parse_search_query(tokenize(query)))
