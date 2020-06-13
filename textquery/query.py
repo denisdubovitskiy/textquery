@@ -34,6 +34,8 @@ class Token:
             return self.key
         return f'{self.field_name}:{self.key}'
 
+    __repr__ = __str__
+
 
 def is_operator(source: str) -> bool:
     return source in {OR, AND, NOT}
@@ -109,6 +111,11 @@ def tokenize(query: str) -> List[Token]:
         if len(field_descriptor) == 6:
             field, _, operator, _, _, value = field_descriptor
             tokens.append(Token(value, field, operator))
+        elif len(field_descriptor) == 3:
+            # field:value
+            field, _, value = field_descriptor
+
+            tokens.append(Token(value, field, '', ''))
         else:
             field, _, modifier, _, _, operator, _, _, value = field_descriptor
             tokens.append(Token(value, field, operator, modifier))
@@ -169,9 +176,7 @@ def parse_search_query(tokens: List[Token]) -> Deque[Token]:
             continue
 
         if is_operator(token.key):
-            while True:
-                if not operators:
-                    break
+            while operators:
 
                 if not is_operator(operators.peek().key):
                     break
